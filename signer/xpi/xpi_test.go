@@ -6,6 +6,7 @@ import (
 	"crypto/rsa"
 	"encoding/base64"
 	"encoding/pem"
+	"errors"
 	"io/ioutil"
 	"os"
 	"os/exec"
@@ -14,6 +15,7 @@ import (
 	"time"
 
 	"go.mozilla.org/autograph/signer"
+	"go.mozilla.org/cose"
 )
 
 func TestSignFile(t *testing.T) {
@@ -350,6 +352,36 @@ func TestRsaCaching(t *testing.T) {
 	t.Logf("retrieved rsa key from cache in %s", elapsed)
 	if key.N.BitLen() != s.issuerKey.(*rsa.PrivateKey).N.BitLen() {
 		t.Fatalf("key bitlen does not match. expected %d, got %d", s.issuerKey.(*rsa.PrivateKey).N.BitLen(), key.N.BitLen())
+	}
+}
+
+func TestIsCOSEAlgBad(t *testing.T) {
+	t.Parallel()
+
+	for _, testCase := range []struct{
+		algName string
+		alg     *cose.Algorithm
+		err   error
+	}{
+		// unrecognized
+		{"ROT13", nil, errors.New("xpi: unrecognized algorithm COSE Signing algorithm")},
+
+		// recognized but not supported
+		{"EdDSA", nil, errors.New("xpi: COSE algorithm is not supported")},
+
+		// recognized and supported
+		{"ES256", cose.GetAlgByNameOrPanic("ES256"), nil},
+		{"ES384", cose.GetAlgByNameOrPanic("ES384"), nil},
+		{"ES512", cose.GetAlgByNameOrPanic("ES512"), nil},
+		{"PS26", cose.GetAlgByNameOrPanic("PS256"), nil},
+	}{
+		alg, err := isCOSEAlgBad(testCase.algName)
+		if testCase.alg != alg {
+			t.Fatalf("isCOSEAlgBad expected alg %+v but got %+v", testCase.alg, alg)
+		}
+		if testCase.err != err {
+			t.Fatalf("isCOSEAlgBad expected error %v but got %v", testCase.err, err)
+		}
 	}
 }
 
