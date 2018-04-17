@@ -190,12 +190,7 @@ func (s *PKCS7Signer) SignFile(input []byte, options interface{}) (signedFile si
 		return nil, errors.Wrap(err, "xpi: cannot make JAR manifest signature from XPI")
 	}
 
-	eeCert, eeKey, err := s.makeEE(opt)
-	if err != nil {
-		return nil, err
-	}
-
-	p7sig, err := s.signDataWithEE(sigfile, eeCert, eeKey)
+	p7sig, err := s.signData(sigfile, options)
 	if err != nil {
 		return nil, errors.Wrap(err, "xpi: failed to sign XPI")
 	}
@@ -316,22 +311,23 @@ func (s *PKCS7Signer) SignData(sigfile []byte, options interface{}) (signer.Sign
 	return sig, nil
 }
 
-func (s *PKCS7Signer) makeEE(opt Options) (eeCert *x509.Certificate, eeKey crypto.PrivateKey, err error) {
+func (s *PKCS7Signer) signData(sigfile []byte, options interface{}) ([]byte, error) {
+	opt, err := GetOptions(options)
+	if err != nil {
+		return nil, errors.Wrap(err, "xpi: cannot get options")
+	}
 	cn := opt.ID
 	if s.EndEntityCN != "" {
 		cn = s.EndEntityCN
 	}
 	if cn == "" {
-		return nil, nil, errors.New("xpi: missing common name")
+		return nil, errors.New("xpi: missing common name")
 	}
-	eeCert, eeKey, err = s.MakeEndEntity(cn)
+	eeCert, eeKey, err := s.MakeEndEntity(cn)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
-	return
-}
 
-func (s *PKCS7Signer) signDataWithEE(sigfile []byte, eeCert *x509.Certificate, eeKey crypto.PrivateKey) ([]byte, error) {
 	toBeSigned, err := pkcs7.NewSignedData(sigfile)
 	if err != nil {
 		return nil, errors.Wrap(err, "xpi: cannot initialize signed data")
@@ -348,19 +344,6 @@ func (s *PKCS7Signer) signDataWithEE(sigfile []byte, eeCert *x509.Certificate, e
 		return nil, errors.Wrap(err, "xpi: cannot finish signing data")
 	}
 	return p7sig, nil
-}
-
-func (s *PKCS7Signer) signData(sigfile []byte, options interface{}) ([]byte, error) {
-	opt, err := GetOptions(options)
-	if err != nil {
-		return nil, errors.Wrap(err, "xpi: cannot get options")
-	}
-
-	eeCert, eeKey, err := s.makeEE(opt)
-	if err != nil {
-		return nil, err
-	}
-	return s.signDataWithEE(sigfile, eeCert, eeKey)
 }
 
 // Options contains specific parameters used to sign XPIs
