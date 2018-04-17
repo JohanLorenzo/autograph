@@ -6,7 +6,6 @@ import (
 	"crypto/rsa"
 	"encoding/base64"
 	"encoding/pem"
-	"errors"
 	"io/ioutil"
 	"os"
 	"os/exec"
@@ -361,26 +360,28 @@ func TestIsCOSEAlgBad(t *testing.T) {
 	for _, testCase := range []struct{
 		algName string
 		alg     *cose.Algorithm
-		err   error
+		err     bool
 	}{
 		// unrecognized
-		{"ROT13", nil, errors.New("xpi: unrecognized algorithm COSE Signing algorithm")},
+		{"ROT13", nil, true},
 
 		// recognized but not supported
-		{"EdDSA", nil, errors.New("xpi: COSE algorithm is not supported")},
+		{"EdDSA", cose.GetAlgByNameOrPanic("EdDSA"), true},
 
 		// recognized and supported
-		{"ES256", cose.GetAlgByNameOrPanic("ES256"), nil},
-		{"ES384", cose.GetAlgByNameOrPanic("ES384"), nil},
-		{"ES512", cose.GetAlgByNameOrPanic("ES512"), nil},
-		{"PS26", cose.GetAlgByNameOrPanic("PS256"), nil},
+		{"ES256", cose.GetAlgByNameOrPanic("ES256"), false},
+		{"ES384", cose.GetAlgByNameOrPanic("ES384"), false},
+		{"ES512", cose.GetAlgByNameOrPanic("ES512"), false},
+		{"PS256", cose.GetAlgByNameOrPanic("PS256"), false},
 	}{
 		alg, err := isCOSEAlgBad(testCase.algName)
-		if testCase.alg != alg {
-			t.Fatalf("isCOSEAlgBad expected alg %+v but got %+v", testCase.alg, alg)
+		if alg != nil && *testCase.alg != *alg {
+			t.Fatalf("isCOSEAlgBad for %s expected alg %+v but got %+v", testCase.algName, testCase.alg, alg)
 		}
-		if testCase.err != err {
-			t.Fatalf("isCOSEAlgBad expected error %v but got %v", testCase.err, err)
+		if testCase.err == false && err != nil {
+			t.Fatalf("isCOSEAlgBad for %s expected no error but got %+v", testCase.algName, err)
+		} else if testCase.err == true && err == nil {
+			t.Fatalf("isCOSEAlgBad for %s did not get expected error", testCase.algName)
 		}
 	}
 }
