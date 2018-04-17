@@ -136,23 +136,23 @@ const (
 
 
 func getKeyOptionsForCOSEAlg(alg *cose.Algorithm) (*keyOptions) {
-	switch alg {
-	case cose.GetAlgByNameOrPanic("ES256"):
+	switch alg.Name {
+	case "ES256":
 		return &keyOptions{
 			keyType: keyTypeECDSA,
 			ecdsaCurve: elliptic.P256(),
 		}
-	case cose.GetAlgByNameOrPanic("ES384"):
+	case "ES384":
 		return &keyOptions{
 			keyType: keyTypeECDSA,
 			ecdsaCurve: elliptic.P384(),
 		}
-	case cose.GetAlgByNameOrPanic("ES512"):
+	case "ES512":
 		return &keyOptions{
 			keyType: keyTypeECDSA,
 			ecdsaCurve: elliptic.P521(),
 		}
-	case cose.GetAlgByNameOrPanic("PS256"):
+	case "PS256":
 		return &keyOptions{
 			keyType: keyTypeRSA,
 			rsaBits: 2048, // TODO: fixme
@@ -180,11 +180,10 @@ type keyOptions struct {
 func (s *PKCS7Signer) MakeDEREndEntity(cn string, opts *keyOptions) (eeDERCert []byte, eeKey crypto.PrivateKey, err error) {
 	var eePublicKey crypto.PublicKey
 	template := s.makeTemplate(cn)
-	size := opts.rsaBits
-	curve := opts.ecdsaCurve
 
 	switch opts.keyType {
 	case keyTypeRSA:
+		size := opts.rsaBits
 		eeKey, err = s.getRsaKey(size)
 		if err != nil {
 			err = errors.Wrapf(err, "xpi.MakeEndEntity: failed to generate rsa private key of size %d", size)
@@ -192,6 +191,7 @@ func (s *PKCS7Signer) MakeDEREndEntity(cn string, opts *keyOptions) (eeDERCert [
 		}
 		eePublicKey = eeKey.(*rsa.PrivateKey).Public()
 	case keyTypeECDSA:
+		curve := opts.ecdsaCurve
 		eeKey, err = ecdsa.GenerateKey(curve, rand.Reader)
 		if err != nil {
 			err = errors.Wrapf(err, "xpi.MakeEndEntity: failed to generate ecdsa private key on curve %s", curve.Params().Name)

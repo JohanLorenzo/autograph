@@ -386,6 +386,64 @@ func TestIsCOSEAlgBad(t *testing.T) {
 	}
 }
 
+func readFileFromZIP(t *testing.T, signedXPI []byte, filename string) (data []byte) {
+	zipReader := bytes.NewReader(signedXPI)
+	r, err := zip.NewReader(zipReader, int64(len(signedXPI)))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, f := range r.File {
+		if f.Name == filename {
+			rc, err := f.Open()
+			defer rc.Close()
+			if err != nil {
+				t.Fatal(err)
+			}
+			data, err = ioutil.ReadAll(rc)
+			if err != nil {
+				t.Fatal(err)
+			}
+			return
+		}
+	}
+	t.Fatalf("failed to find %s in ZIP", filename)
+	return
+}
+
+func TestSignFileWithCOSESignatures(t *testing.T) {
+	t.Parallel()
+
+	input := unsignedBootstrap
+	// initialize a signer
+	testcase := PASSINGTESTCASES[0]
+	s, err := New(testcase)
+	if err != nil {
+		t.Fatalf("signer initialization failed with: %v", err)
+	}
+
+	// sign input data
+	signedXPI, err := s.SignFile(input, Options{
+		ID: "test@example.net",
+		COSEAlgorithms: []string{"ES256", "PS256"},
+	})
+	if err != nil {
+		t.Fatalf("failed to sign file: %v", err)
+	}
+	var (
+		sigdata []byte = readFileFromZIP(t, signedXPI, "META-INF/mozilla.sf")
+		sigstr  string = base64.StdEncoding.EncodeToString(readFileFromZIP(t, signedXPI, "META-INF/mozilla.rsa"))
+	)
+	// convert string format back to signature
+	_, err = Unmarshal(sigstr, sigdata)
+	if err != nil {
+		t.Fatalf("failed to unmarshal signature: %v", err)
+	}
+
+	// TODO: verify COSE signature
+}
+
+
 var PASSINGTESTCASES = []signer.Configuration{
 	signer.Configuration{
 		ID:   "rsa addon",

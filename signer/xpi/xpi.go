@@ -221,7 +221,7 @@ func (s *PKCS7Signer) SignFile(input []byte, options interface{}) (signedFile si
 			}
 
 			// create a COSE.Signer
-			signer, err := cose.NewSigner(&eeKey)
+			signer, err := cose.NewSigner(eeKey)
 			if err != nil {
 				return nil, errors.Wrap(err, "xpi: COSE signer creation failed")
 			}
