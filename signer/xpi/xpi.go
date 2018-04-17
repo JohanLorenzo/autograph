@@ -63,6 +63,97 @@ type PKCS7Signer struct {
 	rsaCache chan *rsa.PrivateKey
 }
 
+// New initializes an new signer using a configuration
+func New(conf signer.Configuration) (s *PKCS7Signer, err error) {
+	s = new(PKCS7Signer)
+	if conf.Type != Type {
+		return nil, errors.Errorf("xpi: invalid type %q, must be %q", conf.Type, Type)
+	}
+	s.Type = conf.Type
+	if conf.ID == "" {
+		return nil, errors.New("xpi: missing signer ID in signer configuration")
+	}
+	s.ID = conf.ID
+	if conf.PrivateKey == "" {
+		return nil, errors.New("xpi: missing private key in signer configuration")
+	}
+	s.PrivateKey = conf.PrivateKey
+	s.issuerKey, err = signer.ParsePrivateKey([]byte(conf.PrivateKey))
+	if err != nil {
+		return nil, errors.Wrap(err, "xpi: failed to parse private key")
+	}
+	block, _ := pem.Decode([]byte(conf.Certificate))
+	if block == nil {
+		return nil, errors.New("xpi: failed to parse certificate PEM")
+	}
+	s.issuerCert, err = x509.ParseCertificate(block.Bytes)
+	if err != nil {
+		return nil, errors.Wrap(err, "xpi: could not parse X.509 certificate")
+	}
+	// some sanity checks for the signer cert
+	if !s.issuerCert.IsCA {
+		return nil, errors.New("xpi: signer certificate must have CA constraint set to true")
+	}
+	if time.Now().Before(s.issuerCert.NotBefore) || time.Now().After(s.issuerCert.NotAfter) {
+		return nil, errors.New("xpi: signer certificate is not currently valid")
+	}
+	if s.issuerCert.KeyUsage&x509.KeyUsageCertSign == 0 {
+		return nil, errors.New("xpi: signer certificate is missing certificate signing key usage")
+	}
+	hasCodeSigning := false
+	for _, eku := range s.issuerCert.ExtKeyUsage {
+		if eku == x509.ExtKeyUsageCodeSigning {
+			hasCodeSigning = true
+			break
+		}
+	}
+	if !hasCodeSigning {
+		return nil, errors.New("xpi: signer certificate does not have code signing EKU")
+	}
+	switch conf.Mode {
+	case ModeAddOn:
+		s.OU = "Production"
+	case ModeExtension:
+		s.OU = "Mozilla Extensions"
+	case ModeSystemAddOn:
+		s.OU = "Mozilla Components"
+	case ModeHotFix:
+		// FIXME: this also needs to pin the signing key somehow
+		s.OU = "Production"
+		s.EndEntityCN = "firefox-hotfix@mozilla.org"
+	default:
+		return nil, errors.Errorf("xpi: unknown signer mode %q, must be 'add-on', 'extension', 'system add-on' or 'hotfix'", conf.Mode)
+	}
+	s.Mode = conf.Mode
+
+	// If the private key is rsa, launch a go routine that populates
+	// the rsa cache with private keys of the same length
+	if _, ok := s.issuerKey.(*rsa.PrivateKey); ok {
+		s.rsaCache = make(chan *rsa.PrivateKey, 100)
+		go s.populateRsaCache(s.issuerKey.(*rsa.PrivateKey).N.BitLen())
+	}
+
+	return
+}
+
+var supportedCOSEAlgorithms = map[*cose.Algorithm]bool{
+	cose.GetAlgByNameOrPanic("PS256"): true,
+	cose.GetAlgByNameOrPanic("ES256"): true,
+	cose.GetAlgByNameOrPanic("ES384"): true,
+	cose.GetAlgByNameOrPanic("ES512"): true,
+}
+
+// Config returns the configuration of the current signer
+func (s *PKCS7Signer) Config() signer.Configuration {
+	return signer.Configuration{
+		ID:          s.ID,
+		Type:        s.Type,
+		Mode:        s.Mode,
+		PrivateKey:  s.PrivateKey,
+		Certificate: s.Certificate,
+	}
+}
+
 // isCOSEAlgBad checks whether a COSE algorithm is recognized as a
 // valid IANA algorithm name, and supported and enabled in autograph
 func isCOSEAlgBad(algName string) (alg *cose.Algorithm, err error) {
@@ -206,97 +297,6 @@ func (s *PKCS7Signer) SignFile(input []byte, options interface{}) (signedFile si
 		return nil, errors.Wrap(err, "xpi: failed to repack XPI")
 	}
 	return signedFile, nil
-}
-
-// New initializes an new signer using a configuration
-func New(conf signer.Configuration) (s *PKCS7Signer, err error) {
-	s = new(PKCS7Signer)
-	if conf.Type != Type {
-		return nil, errors.Errorf("xpi: invalid type %q, must be %q", conf.Type, Type)
-	}
-	s.Type = conf.Type
-	if conf.ID == "" {
-		return nil, errors.New("xpi: missing signer ID in signer configuration")
-	}
-	s.ID = conf.ID
-	if conf.PrivateKey == "" {
-		return nil, errors.New("xpi: missing private key in signer configuration")
-	}
-	s.PrivateKey = conf.PrivateKey
-	s.issuerKey, err = signer.ParsePrivateKey([]byte(conf.PrivateKey))
-	if err != nil {
-		return nil, errors.Wrap(err, "xpi: failed to parse private key")
-	}
-	block, _ := pem.Decode([]byte(conf.Certificate))
-	if block == nil {
-		return nil, errors.New("xpi: failed to parse certificate PEM")
-	}
-	s.issuerCert, err = x509.ParseCertificate(block.Bytes)
-	if err != nil {
-		return nil, errors.Wrap(err, "xpi: could not parse X.509 certificate")
-	}
-	// some sanity checks for the signer cert
-	if !s.issuerCert.IsCA {
-		return nil, errors.New("xpi: signer certificate must have CA constraint set to true")
-	}
-	if time.Now().Before(s.issuerCert.NotBefore) || time.Now().After(s.issuerCert.NotAfter) {
-		return nil, errors.New("xpi: signer certificate is not currently valid")
-	}
-	if s.issuerCert.KeyUsage&x509.KeyUsageCertSign == 0 {
-		return nil, errors.New("xpi: signer certificate is missing certificate signing key usage")
-	}
-	hasCodeSigning := false
-	for _, eku := range s.issuerCert.ExtKeyUsage {
-		if eku == x509.ExtKeyUsageCodeSigning {
-			hasCodeSigning = true
-			break
-		}
-	}
-	if !hasCodeSigning {
-		return nil, errors.New("xpi: signer certificate does not have code signing EKU")
-	}
-	switch conf.Mode {
-	case ModeAddOn:
-		s.OU = "Production"
-	case ModeExtension:
-		s.OU = "Mozilla Extensions"
-	case ModeSystemAddOn:
-		s.OU = "Mozilla Components"
-	case ModeHotFix:
-		// FIXME: this also needs to pin the signing key somehow
-		s.OU = "Production"
-		s.EndEntityCN = "firefox-hotfix@mozilla.org"
-	default:
-		return nil, errors.Errorf("xpi: unknown signer mode %q, must be 'add-on', 'extension', 'system add-on' or 'hotfix'", conf.Mode)
-	}
-	s.Mode = conf.Mode
-
-	// If the private key is rsa, launch a go routine that populates
-	// the rsa cache with private keys of the same length
-	if _, ok := s.issuerKey.(*rsa.PrivateKey); ok {
-		s.rsaCache = make(chan *rsa.PrivateKey, 100)
-		go s.populateRsaCache(s.issuerKey.(*rsa.PrivateKey).N.BitLen())
-	}
-
-	return
-}
-
-var supportedCOSEAlgorithms = map[*cose.Algorithm]bool{
-	cose.GetAlgByNameOrPanic("PS256"): true,
-	cose.GetAlgByNameOrPanic("ES256"): true,
-	cose.GetAlgByNameOrPanic("ES384"): true,
-	cose.GetAlgByNameOrPanic("ES512"): true,
-}
-
-// Config returns the configuration of the current signer
-func (s *PKCS7Signer) Config() signer.Configuration {
-	return signer.Configuration{
-		ID:          s.ID,
-		Type:        s.Type,
-		Mode:        s.Mode,
-		PrivateKey:  s.PrivateKey,
-		Certificate: s.Certificate,
-	}
 }
 
 // SignData takes an input signature file and returns a PKCS7 detached signature
