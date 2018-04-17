@@ -118,6 +118,10 @@ func (s *PKCS7Signer) SignFile(input []byte, options interface{}) (signedFile si
 
 		var coseSigners []*cose.Signer
 
+		// Add list of DER encoded intermediate certificates as message key id
+		msg.Headers.Protected["kid"] = [][]byte{s.issuerCert.Raw[:]}
+		msg.Headers.Protected = cose.CompressHeaders(msg.Headers.Protected)
+
 		for _, alg := range coseSigAlgs {
 			// create a cert and key
 			eeDERCert, eeKey, err := s.MakeDEREndEntity(cn, getKeyOptionsForCOSEAlg(alg))
@@ -130,15 +134,13 @@ func (s *PKCS7Signer) SignFile(input []byte, options interface{}) (signedFile si
 			if err != nil {
 				return nil, errors.Wrap(err, "xpi: COSE signer creation failed")
 			}
+			coseSigners = append(coseSigners, signer)
 
-			// create a slot for a COSE Signature
+			// create a COSE Signature holder
 			sig := cose.NewSignature()
 			sig.Headers.Protected["alg"] = alg.Name
-			// TODO: add DER encoded intermediate public key
-			sig.Headers.Protected["kid"] = eeDERCert // NB: kid should be in protected
-
+			sig.Headers.Protected["kid"] = [][]byte{eeDERCert[:]}
 			msg.AddSignature(sig)
-			coseSigners = append(coseSigners, signer)
 		}
 
 		external := []byte("")
