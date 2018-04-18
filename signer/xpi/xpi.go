@@ -172,7 +172,7 @@ func isCOSEAlgBad(algName string) (alg *cose.Algorithm, err error) {
 // SignFile takes an unsigned zipped XPI file and returns a signed XPI file
 func (s *PKCS7Signer) SignFile(input []byte, options interface{}) (signedFile signer.SignedFile, err error) {
 	var (
-		pkcs7manifest []byte
+		pkcs7Manifest []byte
 		manifest []byte
 		metas = []Metafile{}
 		opt Options
@@ -271,12 +271,12 @@ func (s *PKCS7Signer) SignFile(input []byte, options interface{}) (signedFile si
 			h2.Write(f.Body)
 			fmt.Fprintf(mw, "SHA256-Digest: %s\n\n", base64.StdEncoding.EncodeToString(h2.Sum(nil)))
 		}
-		pkcs7manifest = mw.Bytes()
+		pkcs7Manifest = mw.Bytes()
 	} else {
-		pkcs7manifest = manifest
+		pkcs7Manifest = manifest
 	}
 
-	sigfile, err := makeJARSignature(pkcs7manifest)
+	sigfile, err := makeJARSignature(pkcs7Manifest)
 	if err != nil {
 		return nil, errors.Wrap(err, "xpi: cannot make JAR manifest signature from XPI")
 	}
@@ -287,7 +287,7 @@ func (s *PKCS7Signer) SignFile(input []byte, options interface{}) (signedFile si
 	}
 
 	metas = append(metas, []Metafile{
-		{"META-INF/manifest.mf", manifest},
+		{"META-INF/manifest.mf", pkcs7Manifest},
 		{"META-INF/mozilla.sf", sigfile},
 		{"META-INF/mozilla.rsa", p7sig},
 	}...)
