@@ -431,16 +431,9 @@ func TestSignFileWithCOSESignatures(t *testing.T) {
 		t.Fatalf("failed to sign file: %v", err)
 	}
 	var (
-		sigdata []byte = readFileFromZIP(t, signedXPI, "META-INF/mozilla.sf")
-		sigstr  string = base64.StdEncoding.EncodeToString(readFileFromZIP(t, signedXPI, "META-INF/mozilla.rsa"))
 		coseManifest string = string(readFileFromZIP(t, signedXPI, "META-INF/cose.manifest"))
 		pkcs7Manifest string = string(readFileFromZIP(t, signedXPI, "META-INF/manifest.mf"))
 	)
-	// convert string format back to signature
-	_, err = Unmarshal(sigstr, sigdata)
-	if err != nil {
-		t.Fatalf("failed to unmarshal signature: %v", err)
-	}
 
 	if !strings.Contains(pkcs7Manifest, "cose") {
 		t.Fatalf("pkcs7 manifest does not contain cose files: %s", pkcs7Manifest)
