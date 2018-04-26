@@ -19,12 +19,12 @@ import (
 func makeJARManifests(input []byte) (manifest, sigfile []byte, err error) {
 	manifest, err = makeJARManifest(input)
 	if err != nil {
-		return manifest, sigfile, err
+		return
 	}
 
 	sigfile, err = makeJARSignature(manifest)
 	if err != nil {
-		return manifest, sigfile, err
+		return
 	}
 
 	return
