@@ -128,9 +128,13 @@ func New(conf signer.Configuration) (s *PKCS7Signer, err error) {
 
 	// If the private key is rsa, launch a go routine that populates
 	// the rsa cache with private keys of the same length
-	if _, ok := s.issuerKey.(*rsa.PrivateKey); ok {
+	if issuerPrivateKey, ok := s.issuerKey.(*rsa.PrivateKey); ok {
 		s.rsaCache = make(chan *rsa.PrivateKey, 100)
 		go s.populateRsaCache(s.issuerKey.(*rsa.PrivateKey).N.BitLen())
+
+		if issuerPrivateKey.N.BitLen() < 2048 {
+			return nil, errors.Errorf("xpi: issuer RSA key must be at least 2048 bits")
+		}
 	}
 
 	return
