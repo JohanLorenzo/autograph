@@ -89,10 +89,6 @@ func (s *PKCS7Signer) MakeEndEntity(cn string) (eeCert *x509.Certificate, eeKey 
 	switch s.issuerKey.(type) {
 	case *rsa.PrivateKey:
 		size := s.issuerKey.(*rsa.PrivateKey).N.BitLen()
-		if size < minRSAKeyBits {
-			err = ErrRSAKeyBitsTooSmall
-			return
-		}
 		eeKey, err = s.getRsaKey(size)
 		if err != nil {
 			err = errors.Wrapf(err, "xpi.MakeEndEntity: failed to generate rsa private key of size %d", size)
