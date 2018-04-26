@@ -63,7 +63,7 @@ type PKCS7Signer struct {
 	rsaCache chan *rsa.PrivateKey
 }
 
-// New initializes an new signer using a configuration
+// New initializes an XPI signer using a configuration
 func New(conf signer.Configuration) (s *PKCS7Signer, err error) {
 	s = new(PKCS7Signer)
 	if conf.Type != Type {
