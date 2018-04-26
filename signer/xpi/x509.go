@@ -16,14 +16,6 @@ import (
 	"go.mozilla.org/cose"
 )
 
-const (
-	minRSAKeyBits = 2048 // https://tools.ietf.org/html/rfc8230#section-6
-)
-
-var (
-	ErrRSAKeyBitsTooSmall = errors.New("The RSA key is too small must be at least 2048 bits")
-)
-
 // every minute, add an rsa key to the cache. This will block if
 // the cache channel is already full, which is what we want anyway
 func (s *PKCS7Signer) populateRsaCache(size int) {
@@ -196,10 +188,6 @@ func (s *PKCS7Signer) MakeDEREndEntity(cn string, opts *keyOptions) (eeDERCert [
 	switch opts.keyType {
 	case keyTypeRSA:
 		size := opts.rsaBits
-		if size < minRSAKeyBits {
-			err = ErrRSAKeyBitsTooSmall
-			return
-		}
 		eeKey, err = s.getRsaKey(size)
 		if err != nil {
 			err = errors.Wrapf(err, "xpi.MakeEndEntity: failed to generate rsa private key of size %d", size)
