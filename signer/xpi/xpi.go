@@ -249,7 +249,7 @@ func (s *PKCS7Signer) SignFile(input []byte, options interface{}) (signedFile si
 		if err != nil {
 			return nil, errors.Wrap(err, "xpi: COSE signing failed")
 		}
-		// don't include signature in payload
+		// for addons the signature is detached and the payload is always nil / null
 		msg.Payload = nil
 
 		coseSig, err := cose.Marshal(msg)
