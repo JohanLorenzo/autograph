@@ -13,10 +13,10 @@ import (
 )
 
 
-// makeJARManifests writes hashes for all entries in a zip to a
+// makeJARManifestAndSignature writes hashes for all entries in a zip to a
 // manifest file then hashes the manifest file to write a signature
 // file and returns both
-func makeJARManifests(input []byte) (manifest, sigfile []byte, err error) {
+func makeJARManifestAndSignature(input []byte) (manifest, sigfile []byte, err error) {
 	manifest, err = makeJARManifest(input)
 	if err != nil {
 		return
