@@ -1,11 +1,10 @@
 package cose
 
 import (
-	"encoding/binary"
+	"crypto/rand"
 	"encoding/hex"
 	"fmt"
 	"github.com/stretchr/testify/assert"
-	"math/rand"
 	"strings"
 	"testing"
 )
@@ -18,7 +17,7 @@ func WGExampleSignsAndVerifies(t *testing.T, example WGExample) {
 	assert.Equal(len(example.Input.Sign.Signers), 1)
 
 	signerInput := example.Input.Sign.Signers[0]
-	alg := GetAlgByNameOrPanic(signerInput.Protected.Alg)
+	alg := getAlgByNameOrPanic(signerInput.Protected.Alg)
 	external := HexToBytesOrDie(signerInput.External)
 
 	decoded, err := Unmarshal(HexToBytesOrDie(example.Output.Cbor))
@@ -31,19 +30,14 @@ func WGExampleSignsAndVerifies(t *testing.T, example WGExample) {
 	message, ok := decoded.(SignMessage)
 	assert.True(ok, fmt.Sprintf("%s: Error casting example CBOR to SignMessage", example.Title))
 
-	// TODO: pass alg to signer?
-	signer, err := NewSigner(&privateKey)
+	signer, err := NewSignerFromKey(alg, &privateKey)
 	assert.Nil(err, fmt.Sprintf("%s: Error creating signer %s", example.Title, err))
 
-	verifier := signer.Verifier(alg)
+	verifier := signer.Verifier()
 
 	// Test Verify - signatures CBOR decoded from example
 	assert.NotNil(message.Signatures[0].SignatureBytes)
-	err = message.Verify(external, &VerifyOpts{
-		GetVerifier: func(index int, signature Signature) (Verifier, error) {
-			return *verifier, nil
-		},
-	})
+	err = message.Verify(external, []Verifier{*verifier})
 	if example.Fail {
 		assert.NotNil(err, fmt.Sprintf("%s: verifying signature did not fail. Got nil instead of error from signature verification failure", example.Title))
 
@@ -54,17 +48,11 @@ func WGExampleSignsAndVerifies(t *testing.T, example WGExample) {
 	assert.Nil(err, fmt.Sprintf("%s: error verifying signature %+v", example.Title, err))
 
 	// Test Sign
-	randReader := rand.New(rand.NewSource(int64(binary.BigEndian.Uint64([]byte(example.Input.RngDescription)))))
 
 	// clear the signature
 	message.Signatures[0].SignatureBytes = nil
 
-	err = message.Sign(randReader, external, SignOpts{
-		HashFunc: alg.HashFunc,
-		GetSigner: func(index int, signature Signature) (Signer, error) {
-			return *signer, nil
-		},
-	})
+	err = message.Sign(rand.Reader, external, []Signer{*signer})
 	assert.Nil(err, fmt.Sprintf("%s: signing failed with err %s", example.Title, err))
 
 	// check intermediate
@@ -73,10 +61,6 @@ func WGExampleSignsAndVerifies(t *testing.T, example WGExample) {
 	assert.Equal(example.Intermediates.Signers[0].ToBeSignHex,
 		strings.ToUpper(hex.EncodeToString(ToBeSigned)),
 		fmt.Sprintf("%s: signing wrong Hex Intermediate", example.Title))
-
-	// check cbor matches (will not match per message keys k match which depend on our RNGs)
-	// signed := strings.ToUpper(hex.EncodeToString(Marshal(output)))
-	// assert.Equal(example.Output.Cbor, signed, "CBOR encoded message wrong")
 
 	// Verify our signature (round trip)
 	digest, err := hashSigStructure(ToBeSigned, alg.HashFunc)

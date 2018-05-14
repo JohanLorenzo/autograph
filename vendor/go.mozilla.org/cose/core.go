@@ -1,38 +1,107 @@
 package cose
 
 import (
+	"encoding/base64"
 	"bytes"
 	"crypto"
 	"crypto/ecdsa"
 	"crypto/rsa"
+	"crypto/rand"
+	"crypto/elliptic"
 	"fmt"
 	"io"
 	"math/big"
+	"github.com/pkg/errors"
 )
 
-const (
-	// text strings identifying the context of the signature
-	// https://tools.ietf.org/html/rfc8152#section-4.4
+// ContextSignature identifies the context of the signature as a
+// COSE_Signature structure per
+// https://tools.ietf.org/html/rfc8152#section-4.4
+const ContextSignature = "Signature"
 
-	// ContextSignature for signatures using the COSE_Signature structure
-	ContextSignature = "Signature"
+// Supported Algorithms
+var (
+	// PS256 is RSASSA-PSS w/ SHA-256 from [RFC8230]
+	PS256 = getAlgByNameOrPanic("PS256")
 
-	// ContextSignature1 for signatures using the COSE_Sign1 structure
-	ContextSignature1 = "Signature1"
+	// ES256 is ECDSA w/ SHA-256 from [RFC8152]
+	ES256 = getAlgByNameOrPanic("ES256")
 
-	// ContextCounterSignature for signatures used as counter signature attributes
-	ContextCounterSignature = "CounterSignature"
+	// ES384 is ECDSA w/ SHA-384 from [RFC8152]
+	ES384 = getAlgByNameOrPanic("ES384")
+
+	// ES512 is ECDSA w/ SHA-512 from [RFC8152]
+	ES512 = getAlgByNameOrPanic("ES512")
 )
 
-// Signer holds a private key for signing SignMessages implements
-// crypto.Signer interface
-type Signer struct {
-	privateKey crypto.PrivateKey
+// ByteSigner take a signature digest and returns COSE signature bytes
+type ByteSigner interface {
+	// Sign returns the COSE signature as a byte slice
+	Sign(rand io.Reader, digest []byte) (signature []byte, err error)
 }
 
-// NewSigner checks whether the privateKey is supported and returns a
-// new cose.Signer
-func NewSigner(privateKey crypto.PrivateKey) (signer *Signer, err error) {
+// ByteVerifier checks COSE signatures
+type ByteVerifier interface {
+	// Verify returns nil for a successfully verified signature or an error
+	Verify(digest []byte, signature []byte) (err error)
+}
+
+// Signer holds a COSE Algorithm and private key for signing messages
+type Signer struct {
+	privateKey crypto.PrivateKey
+	alg        *Algorithm
+}
+
+// RSAOptions are options for NewSigner currently just the RSA Key
+// size
+type RSAOptions struct {
+	Size int
+}
+
+// NewSigner returns a Signer with a generated key
+func NewSigner(alg *Algorithm, options interface{}) (signer *Signer, err error) {
+	var privateKey crypto.PrivateKey
+
+	if alg.privateKeyType == KeyTypeECDSA {
+		if alg.privateKeyECDSACurve == nil {
+			err = fmt.Errorf("No ECDSA curve found for algorithm")
+			return nil, err
+		}
+
+		privateKey, err = ecdsa.GenerateKey(alg.privateKeyECDSACurve, rand.Reader)
+		if err != nil {
+			err = errors.Wrapf(err, "error generating ecdsa signer private key")
+			return nil, err
+		}
+	} else if alg.privateKeyType == KeyTypeRSA {
+		var keyBitLen int = alg.minRSAKeyBitLen
+
+		if opts, ok := options.(RSAOptions); ok {
+			if opts.Size > alg.minRSAKeyBitLen {
+				keyBitLen = opts.Size
+			} else {
+				err = fmt.Errorf("error generating rsa signer private key RSA key size must be at least %d", alg.minRSAKeyBitLen)
+				return nil, err
+			}
+		}
+		privateKey, err = rsa.GenerateKey(rand.Reader, keyBitLen)
+		if err != nil {
+			err = errors.Wrapf(err, "error generating rsa signer private key")
+			return nil, err
+		}
+	} else {
+                return nil, ErrUnknownPrivateKeyType
+        }
+
+	return &Signer{
+		privateKey: privateKey,
+		alg: alg,
+	}, nil
+}
+
+// NewSignerFromKey checks whether the privateKey is supported and
+// returns a Signer using the provided key
+func NewSignerFromKey(alg *Algorithm, privateKey crypto.PrivateKey) (signer *Signer, err error) {
 	switch privateKey.(type) {
 	case *rsa.PrivateKey:
 	case *ecdsa.PrivateKey:
@@ -41,6 +110,7 @@ func NewSigner(privateKey crypto.PrivateKey) (signer *Signer, err error) {
 	}
 	return &Signer{
 		privateKey: privateKey,
+		alg: alg,
 	}, nil
 }
 
@@ -56,52 +126,51 @@ func (s *Signer) Public() (publicKey crypto.PublicKey) {
 	}
 }
 
-// SignOpts are options for Signer.Sign()
-//
-// HashFunc is the crypto.Hash to apply to the SigStructure
-// func GetSigner returns the cose.Signer for the signature protected
-// key ID or an error when one isn't found
-type SignOpts struct {
-	HashFunc  crypto.Hash
-	GetSigner func(index int, signature Signature) (Signer, error)
-}
-
 // Sign returns the COSE signature as a byte slice
-func (s *Signer) Sign(rand io.Reader, digest []byte, opts SignOpts) (signature []byte, err error) {
+func (s *Signer) Sign(rand io.Reader, digest []byte) (signature []byte, err error) {
 	switch key := s.privateKey.(type) {
 	case *rsa.PrivateKey:
-		sig, err := rsa.SignPSS(rand, key, opts.HashFunc, digest, &rsa.PSSOptions{
+		if s.alg.privateKeyType != KeyTypeRSA {
+			return nil, fmt.Errorf("Key type must be RSA")
+		}
+		if key.N.BitLen() < s.alg.minRSAKeyBitLen {
+			return nil, fmt.Errorf("RSA key must be at least %d bits long", s.alg.minRSAKeyBitLen)
+		}
+
+		sig, err := rsa.SignPSS(rand, key, s.alg.HashFunc, digest, &rsa.PSSOptions{
 			SaltLength: rsa.PSSSaltLengthEqualsHash,
-			Hash:       opts.HashFunc,
+			Hash:       s.alg.HashFunc,
 		})
 		if err != nil {
 			return nil, fmt.Errorf("rsa.SignPSS error %s", err)
 		}
 		return sig, nil
 	case *ecdsa.PrivateKey:
+		if s.alg.privateKeyType != KeyTypeECDSA {
+			return nil, fmt.Errorf("Key type must be ECDSA")
+		}
+
 		// https://tools.ietf.org/html/rfc8152#section-8.1
 		r, s, err := ecdsa.Sign(rand, key, digest)
 		if err != nil {
 			return nil, fmt.Errorf("ecdsa.Sign error %s", err)
 		}
 
-		// TODO: assert r and s are the same length will be
-		// the same length as the length of the key used for
-		// the signature process
-
-		// The signature is encoded by converting the integers into
-		// byte strings of the same length as the key size.  The
-		// length is rounded up to the nearest byte and is left padded
-		// with zero bits to get to the correct length.  The two
-		// integers are then concatenated together to form a byte
-		// string that is the resulting signature.
-		curveBits := key.Curve.Params().BitSize
-		keyBytes := curveBits / 8
-		if curveBits%8 > 0 {
-			keyBytes++
+		// These integers (r and s) will be the same length as
+		// the length of the key used for the signature
+		// process.
+		if !(s.BitLen() == r.BitLen() && s.BitLen() == key.D.BitLen()) {
+			fmt.Printf("Bit lengths of integers r and s (%d and %d) do not match the key length %d\n", s.BitLen(), r.BitLen(), key.D.BitLen())
 		}
 
-		n := keyBytes
+		// The signature is encoded by converting the integers
+		// into byte strings of the same length as the key
+		// size.  The length is rounded up to the nearest byte
+		// and is left padded with zero bits to get to the
+		// correct length.  The two integers are then
+		// concatenated together to form a byte string that is
+		// the resulting signature.
+		n := ecdsaCurveKeyBytesSize(key.Curve)
 		sig := make([]byte, 0)
 		sig = append(sig, I2OSP(r, n)...)
 		sig = append(sig, I2OSP(s, n)...)
@@ -113,11 +182,11 @@ func (s *Signer) Sign(rand io.Reader, digest []byte, opts SignOpts) (signature [
 }
 
 // Verifier returns a Verifier using the Signer's public key and
-// provided Algorithm
-func (s *Signer) Verifier(alg *Algorithm) (verifier *Verifier) {
+// Algorithm
+func (s *Signer) Verifier() (verifier *Verifier) {
 	return &Verifier{
 		publicKey: s.Public(),
-		alg:       alg,
+		alg:       s.alg,
 	}
 }
 
@@ -125,13 +194,6 @@ func (s *Signer) Verifier(alg *Algorithm) (verifier *Verifier) {
 type Verifier struct {
 	publicKey crypto.PublicKey
 	alg       *Algorithm
-}
-
-// VerifyOpts are options to the Verifier.Verify requires a function
-// that returns verifier or error for a given signature and message
-// index
-type VerifyOpts struct {
-	GetVerifier func(index int, signature Signature) (Verifier, error)
 }
 
 // Verify verifies a signature returning nil for success or an error
@@ -153,18 +215,26 @@ func (v *Verifier) Verify(digest []byte, signature []byte) (err error) {
 		}
 		return nil
 	case *ecdsa.PublicKey:
-		keySize := v.alg.keySize
-		if keySize < 1 {
-			return fmt.Errorf("Could not find a keySize for the ecdsa algorithm")
+		if v.alg.privateKeyECDSACurve == nil {
+			return fmt.Errorf("Could not find an elliptic curve for the ecdsa algorithm")
 		}
 
-		// r and s from sig
-		if len(signature) != 2*keySize {
+		algCurveBitSize := v.alg.privateKeyECDSACurve.Params().BitSize
+		keyCurveBitSize := key.Curve.Params().BitSize
+
+		if algCurveBitSize != keyCurveBitSize {
+			return fmt.Errorf("Expected %d bit key, got %d bits instead", algCurveBitSize, keyCurveBitSize)
+		}
+
+		algKeyBytesSize := ecdsaCurveKeyBytesSize(v.alg.privateKeyECDSACurve)
+
+		// signature bytes is the keys with padding r and s
+		if len(signature) != 2*algKeyBytesSize {
 			return fmt.Errorf("invalid signature length: %d", len(signature))
 		}
 
-		r := big.NewInt(0).SetBytes(signature[:keySize])
-		s := big.NewInt(0).SetBytes(signature[keySize:])
+		r := big.NewInt(0).SetBytes(signature[:algKeyBytesSize])
+		s := big.NewInt(0).SetBytes(signature[algKeyBytesSize:])
 
 		ok := ecdsa.Verify(key, digest, r, s)
 		if ok {
@@ -176,16 +246,9 @@ func (v *Verifier) Verify(digest []byte, signature []byte) (err error) {
 	}
 }
 
-// imperative functions on byte slices level
-
 // buildAndMarshalSigStructure creates a Sig_structure, populates it
 // with the appropriate fields, and marshals it to CBOR bytes
-func buildAndMarshalSigStructure(
-	bodyProtected []byte,
-	signProtected []byte,
-	external []byte,
-	payload []byte,
-) (ToBeSigned []byte, err error) {
+func buildAndMarshalSigStructure(bodyProtected, signProtected, external, payload []byte) (ToBeSigned []byte, err error) {
 	// 1.  Create a Sig_structure and populate it with the appropriate fields.
 	//
 	// Sig_structure = [
@@ -223,7 +286,20 @@ func hashSigStructure(ToBeSigned []byte, hash crypto.Hash) (digest []byte, err e
 	return digest, nil
 }
 
-// I2OSP converts a nonnegative integer to an octet string of a specified length
+// ecdsaCurveKeyBytesSize returns the ECDSA key size in bytes with padding
+func ecdsaCurveKeyBytesSize(curve elliptic.Curve) (keyBytesSize int) {
+	curveBits := curve.Params().BitSize
+	keyBytesSize = curveBits / 8
+
+	// add a byte of padding for curves like P521
+	if curveBits%8 > 0 {
+		keyBytesSize++
+	}
+	return
+}
+
+// I2OSP "Integer-to-Octet-String" converts a nonnegative integer to
+// an octet string of a specified length
 // https://tools.ietf.org/html/rfc8017#section-4.1
 //
 // implementation from
@@ -238,4 +314,47 @@ func I2OSP(b *big.Int, n int) []byte {
 		return buf.Bytes()
 	}
 	return os[:n]
+}
+
+// FromBase64Int decodes a base64-encoded string into a big.Int or panics
+//
+// from https://github.com/square/go-jose/blob/789a4c4bd4c118f7564954f441b29c153ccd6a96/utils_test.go#L45
+// Apache License 2.0
+func FromBase64Int(data string) *big.Int {
+	val, err := base64.RawURLEncoding.DecodeString(data)
+	if err != nil {
+		panic("Invalid test data")
+	}
+	return new(big.Int).SetBytes(val)
+}
+
+
+// Sign returns the SignatureBytes for each Signer in the same order
+// on the digest or the error from the first failing Signer
+func Sign(rand io.Reader, digest []byte, signers []ByteSigner) (signatures [][]byte, err error) {
+	var signatureBytes []byte
+
+	for _, signer := range signers {
+		signatureBytes, err = signer.Sign(rand, digest)
+		if err != nil {
+			return
+		}
+		signatures = append(signatures, signatureBytes)
+	}
+	return
+}
+
+// Verify returns nil if all Verifier verify the SignatureBytes or the
+// error from the first failing Verifier
+func Verify(digest []byte, signatures [][]byte, verifiers []ByteVerifier) (err error) {
+	if len(signatures) != len(verifiers) {
+		return fmt.Errorf("Wrong number of signatures %d and verifiers %d", len(signatures), len(verifiers))
+	}
+	for i, verifier := range verifiers {
+		err = verifier.Verify(digest, signatures[i])
+		if err != nil {
+			return
+		}
+	}
+	return nil
 }

@@ -1,6 +1,7 @@
 package cose
 
 import (
+	"crypto/rand"
 	"crypto/x509"
 	"encoding/hex"
 	"fmt"
@@ -22,23 +23,23 @@ func RustCoseVerifiesGoCoseSignatures(t *testing.T, testCase RustTestCase) {
 	signers := []Signer{}
 	verifiers := []Verifier{}
 
-	var payload = []byte(testCase.SignPayload)
-	message := NewSignMessage(payload)
+	message := NewSignMessage()
 	msgHeaders := &Headers{
 		Protected:   map[interface{}]interface{}{},
 		Unprotected: map[interface{}]interface{}{},
 	}
 	msgHeaders.Protected[kidTag] = testCase.Certs
 	message.Headers = msgHeaders
+	message.Payload = []byte(testCase.SignPayload)
 
 	for _, param := range testCase.Params {
 		key, err := x509.ParsePKCS8PrivateKey(param.pkcs8)
 		assert.Nil(err)
 
-		signer, err := NewSigner(key)
+		signer, err := NewSignerFromKey(param.algorithm, key)
 		assert.Nil(err, fmt.Sprintf("%s: Error creating signer %s", testCase.Title, err))
 		signers = append(signers, *signer)
-		verifiers = append(verifiers, *signer.Verifier(param.algorithm))
+		verifiers = append(verifiers, *signer.Verifier())
 
 		sig := NewSignature()
 		sig.Headers.Protected[algTag] = param.algorithm.Value
@@ -51,11 +52,7 @@ func RustCoseVerifiesGoCoseSignatures(t *testing.T, testCase RustTestCase) {
 
 	var external []byte
 
-	err := message.Sign(randReader, external, SignOpts{
-		GetSigner: func(index int, signature Signature) (Signer, error) {
-			return signers[index], nil
-		},
-	})
+	err := message.Sign(rand.Reader, external, signers)
 	assert.Nil(err, fmt.Sprintf("%s: signing failed with err %s", testCase.Title, err))
 
 	if testCase.ModifySignature {
@@ -69,29 +66,11 @@ func RustCoseVerifiesGoCoseSignatures(t *testing.T, testCase RustTestCase) {
 
 	message.Payload = nil
 
-	// Verify our signature (round trip)
-	err = message.Verify(external, &VerifyOpts{
-		GetVerifier: func(index int, signature Signature) (Verifier, error) {
-			return verifiers[index], nil
-		},
-	})
-
-	// skip round trip verify since it might not do things like verify the cert that nss does
-	// if testCase.ModifySignature || testCase.ModifyPayload {
-	// 	assert.Equal(testCase.VerifyResult, err, fmt.Sprintf("%s: round trip signature verification returned unexpected result %s", testCase.Title, err))
-	// } else {
-	// 	assert.Nil(err, fmt.Sprintf("%s: round trip signature verification failed %s", testCase.Title, err))
-	// }
-
 	// Verify our signature with cose-rust
 
 	// encode message and signature
 	msgBytes, err := Marshal(message)
 	assert.Nil(err, fmt.Sprintf("%s: Error marshaling signed message to bytes %s", testCase.Title, err))
-
-	// fmt.Println(fmt.Sprintf("payload:\n%s\nsig:\n%s\n",
-	// 	hex.EncodeToString([]byte(testCase.SignPayload)),
-	// 	hex.EncodeToString(msgBytes)))
 
 	// Make sure cose-rust can verify our signature too
 	cmd := exec.Command("cargo", "run", "--quiet", "--color", "never", "--example", "sign_verify",
@@ -102,6 +81,8 @@ func RustCoseVerifiesGoCoseSignatures(t *testing.T, testCase RustTestCase) {
 
 	cmd.Dir = "./test/cose-rust"
 	cmd.Env = append(os.Environ(), "RUSTFLAGS=-A dead_code -A unused_imports")
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
 	err = cmd.Run()
 
 	if testCase.ModifySignature || testCase.ModifyPayload {

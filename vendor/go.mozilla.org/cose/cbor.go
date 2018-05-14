@@ -6,28 +6,9 @@ import (
 	"reflect"
 )
 
-const (
-	// COSE Message CBOR tags from
-	// https://www.iana.org/assignments/cbor-tags/cbor-tags.xhtml#tags
-
-	// Encrypt0MessageCBORTag is the CBOR tag for an Encrypt0Message
-	Encrypt0MessageCBORTag = 16
-
-	// MAC0MessageCBORTag is the CBOR tag for a MAC0Message
-	MAC0MessageCBORTag     = 17
-
-	// Sign1MessageCBORTag is the CBOR tag for a Sign1Message
-	Sign1MessageCBORTag    = 18
-
-	// EncryptMessageCBORTag is the CBOR tag for an EncryptMessage
-	EncryptMessageCBORTag = 96
-
-	// MACMessageCBORTag is the CBOR tag for a MACMessage
-	MACMessageCBORTag     = 97
-
-	// SignMessageCBORTag is the CBOR tag for a SignMessage
-	SignMessageCBORTag    = 98
-)
+// SignMessageCBORTag is the CBOR tag for a COSE SignMessage
+// from https://www.iana.org/assignments/cbor-tags/cbor-tags.xhtml#tags
+const SignMessageCBORTag = 98
 
 // GetCOSEHandle returns a codec.CborHandle with an extension
 // registered for COSE SignMessage as CBOR tag 98
@@ -35,16 +16,10 @@ func GetCOSEHandle() (h *codec.CborHandle) {
 	h = new(codec.CborHandle)
 	h.IndefiniteLength = false // no streaming
 	h.Canonical = true         // sort map keys
+	h.SignedInteger = true
 
 	var cExt Ext
-	// h.SetInterfaceExt(reflect.TypeOf(Encrypt0Message{}), EncryptMessageCBORTag, cExt)
-	// h.SetInterfaceExt(reflect.TypeOf(MAC0Message{}), MAC0MessageCBORTag, cExt)
-	// h.SetInterfaceExt(reflect.TypeOf(Sign1Message{}), Sign1MessageCBORTag, cExt)
-
-	// h.SetInterfaceExt(reflect.TypeOf(EncryptMessage{}), EncryptMessageCBORTag, cExt)
-	// h.SetInterfaceExt(reflect.TypeOf(MACMessage{}), MACMessageCBORTag, cExt)
 	h.SetInterfaceExt(reflect.TypeOf(SignMessage{}), SignMessageCBORTag, cExt)
-
 	return h
 }
 
@@ -57,8 +32,6 @@ func Marshal(o interface{}) (b []byte, err error) {
 }
 
 // Unmarshal returns the CBOR decoding of a []byte into param o
-// TODO: decode into object inplace to implement the more encoding interface func Unmarshal(data []byte, v interface{}) error
-// TODO: decode with readers for better interop in autograph
 func Unmarshal(b []byte) (o interface{}, err error) {
 	var dec *codec.Decoder = codec.NewDecoderBytes(b, GetCOSEHandle())
 
@@ -79,9 +52,21 @@ func (x Ext) ConvertExt(v interface{}) interface{} {
 	if !ok {
 		panic(fmt.Sprintf("unsupported format expecting to encode SignMessage; got %T", v))
 	}
+	if message.Headers == nil {
+		panic("SignMessage has nil Headers")
+	}
+	dup := FindDuplicateHeader(message.Headers)
+	if dup != nil {
+		panic(fmt.Sprintf("Duplicate header %+v found", dup))
+	}
 
 	sigs := make([]interface{}, len(message.Signatures))
 	for i, s := range message.Signatures {
+		dup := FindDuplicateHeader(s.Headers)
+		if dup != nil {
+			panic(fmt.Sprintf("Duplicate signature header %+v found", dup))
+		}
+
 		sigs[i] = []interface{}{
 			s.Headers.EncodeProtected(),
 			s.Headers.EncodeUnprotected(),
@@ -98,7 +83,7 @@ func (x Ext) ConvertExt(v interface{}) interface{} {
 }
 
 // UpdateExt updates a value from a simpler interface for easy
-// decoding dest is always a point
+// decoding dest is always a pointer to a SignMessage
 //
 // Note: dest is always a pointer kind to the registered extension type.
 //
@@ -139,6 +124,11 @@ func (x Ext) ConvertExt(v interface{}) interface{} {
 //
 // Note: the decoder will convert panics to errors
 func (x Ext) UpdateExt(dest interface{}, v interface{}) {
+	message, ok := dest.(*SignMessage)
+	if !ok {
+		panic(fmt.Sprintf("unsupported format expecting to decode into *SignMessage; got %T", dest))
+	}
+
 	var src, vok = v.([]interface{})
 	if !vok {
 		panic(fmt.Sprintf("unsupported format expecting to decode from []interface{}; got %T", v))
@@ -156,14 +146,16 @@ func (x Ext) UpdateExt(dest interface{}, v interface{}) {
 		panic(fmt.Sprintf("error decoding header bytes; got %s", err))
 	}
 
-	var payload, pok = src[2].([]byte)
-	if !pok {
-		panic(fmt.Sprintf("error decoding msg payload decode from interface{} to []byte; got %T", src[2]))
-	}
-
-	var m = NewSignMessage(payload)
-	var message = &m
 	message.Headers = msgHeaders
+
+	switch payload := src[2].(type) {
+	case []byte:
+		message.Payload = payload
+	case nil:
+		message.Payload = nil
+	default:
+		panic(fmt.Sprintf("error decoding msg payload decode from interface{} to []byte or nil; got type %T", src[2]))
+	}
 
 	var sigs, sok = src[3].([]interface{})
 	if !sok {
@@ -174,10 +166,4 @@ func (x Ext) UpdateExt(dest interface{}, v interface{}) {
 		sigT.Decode(sig) // can panic
 		message.AddSignature(sigT)
 	}
-
-	destMessage, ok := dest.(*SignMessage)
-	if !ok {
-		panic(fmt.Sprintf("unsupported format expecting to decode into *SignMessage; got %T", dest))
-	}
-	*destMessage = *message
 }
