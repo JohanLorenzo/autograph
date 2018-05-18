@@ -140,13 +140,6 @@ func New(conf signer.Configuration) (s *PKCS7Signer, err error) {
 	return
 }
 
-var supportedCOSEAlgNames = map[string]bool{
-	"PS256": true,
-	"ES256": true,
-	"ES384": true,
-	"ES512": true,
-}
-
 // Config returns the configuration of the current signer
 func (s *PKCS7Signer) Config() signer.Configuration {
 	return signer.Configuration{
@@ -156,21 +149,6 @@ func (s *PKCS7Signer) Config() signer.Configuration {
 		PrivateKey:  s.PrivateKey,
 		Certificate: s.Certificate,
 	}
-}
-
-// isCOSEAlgBad checks whether a COSE algorithm is recognized as a
-// valid IANA algorithm name, and supported and enabled in autograph
-func isCOSEAlgBad(algName string) (alg *cose.Algorithm, err error) {
-	alg, algErr := cose.GetAlgByName(algName)
-	if algErr != nil {
-		err = errors.Wrapf(algErr, "xpi: unrecognized algorithm COSE Signing algorithm")
-		return
-	}
-	if _, exists := supportedCOSEAlgNames[alg.Name]; exists == false {
-		err = fmt.Errorf("xpi: COSE algorithm %s is not supported", algName)
-		return
-	}
-	return alg, nil
 }
 
 // SignFile takes an unsigned zipped XPI file and returns a signed XPI file
