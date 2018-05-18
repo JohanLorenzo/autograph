@@ -3,6 +3,7 @@ package xpi // import "go.mozilla.org/autograph/signer/xpi"
 import (
 	"bytes"
 	"crypto"
+	"crypto/rand"
 	"crypto/rsa"
 	"crypto/sha1"
 	"crypto/sha256"
@@ -11,7 +12,6 @@ import (
 	"encoding/json"
 	"encoding/pem"
 	"fmt"
-	"math/rand"
 	"time"
 
 	"github.com/pkg/errors"
@@ -216,14 +216,7 @@ func (s *PKCS7Signer) SignFile(input []byte, options interface{}) (signedFile si
 			msg.AddSignature(sig)
 		}
 
-		external := []byte("")
-		randReader := rand.New(rand.NewSource(time.Now().UnixNano()))
-
-		err = msg.Sign(randReader, external, cose.SignOpts{
-			GetSigner: func(index int, signature cose.Signature) (cose.Signer, error) {
-				return *coseSigners[index], nil
-			},
-		})
+		err = msg.Sign(rand.Reader, []byte(""), coseSigners)
 		if err != nil {
 			return nil, errors.Wrap(err, "xpi: COSE signing failed")
 		}
