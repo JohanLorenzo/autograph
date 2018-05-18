@@ -15,13 +15,13 @@ import (
 // the algorithm isn't implemented
 func stringToCOSEAlg(s string) (v *cose.Algorithm) {
 	switch strings.ToUpper(s) {
-	case "PS256":
+	case cose.PS256.Name:
 		v = cose.PS256
-	case "ES256":
+	case cose.ES256.Name:
 		v = cose.ES256
-	case "ES384":
+	case cose.ES384.Name:
 		v = cose.ES384
-	case "ES512":
+	case cose.ES512.Name:
 		v = cose.ES512
 	default:
 		v = nil
