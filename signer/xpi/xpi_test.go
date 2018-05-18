@@ -357,6 +357,7 @@ func TestRsaCaching(t *testing.T) {
 	}
 }
 
+// readFileFromZIP reads a given filename out of a ZIP or fails the test
 func readFileFromZIP(t *testing.T, signedXPI []byte, filename string) (data []byte) {
 	zipReader := bytes.NewReader(signedXPI)
 	r, err := zip.NewReader(zipReader, int64(len(signedXPI)))
