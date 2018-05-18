@@ -186,8 +186,9 @@ func (s *PKCS7Signer) SignFile(input []byte, options interface{}) (signedFile si
 		if cn == "" {
 			return nil, errors.New("xpi: missing common name")
 		}
-		tmp := cose.NewSignMessage(manifest)
+		tmp := cose.NewSignMessage()
 		msg := &tmp
+		msg.Payload = manifest
 
 		var coseSigners []*cose.Signer
 
