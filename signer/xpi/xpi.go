@@ -212,7 +212,7 @@ func (s *PKCS7Signer) SignFile(input []byte, options interface{}) (signedFile si
 			// create a COSE Signature holder
 			sig := cose.NewSignature()
 			sig.Headers.Protected["alg"] = alg.Name
-			sig.Headers.Protected["kid"] = [][]byte{eeCert.Raw[:]}
+			sig.Headers.Protected["kid"] = eeCert.Raw[:]
 			msg.AddSignature(sig)
 		}
 
