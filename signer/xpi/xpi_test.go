@@ -4,8 +4,10 @@ import (
 	"archive/zip"
 	"bytes"
 	"crypto/rsa"
+	"crypto/x509"
 	"encoding/base64"
 	"encoding/pem"
+	"fmt"
 	"io/ioutil"
 	"os"
 	"os/exec"
@@ -13,8 +15,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/pkg/errors"
 	"go.mozilla.org/autograph/signer"
-	// "go.mozilla.org/cose"
+	"go.mozilla.org/cose"
 )
 
 func TestSignFile(t *testing.T) {
@@ -379,6 +382,59 @@ func readFileFromZIP(t *testing.T, signedXPI []byte, filename string) (data []by
 	return
 }
 
+// isValidCOSEMessage checks whether a COSE SignMessage is a valid for XPIs
+func isValidCOSEMessage(msg cose.SignMessage) error {
+	if msg.Payload != nil {
+		return fmt.Errorf("Expected SignMessage payload to be nil, but got %+v", msg.Payload)
+	}
+	if len(msg.Headers.Unprotected) != 0 {
+		return fmt.Errorf("Expected cose.sig SignMessage Unprotected headers to be empty, but got %+v", msg.Headers.Unprotected)
+	}
+
+	for i, sig := range msg.Signatures {
+		err := isValidCOSESignature(sig)
+		if err != nil {
+			return errors.Wrapf(err, "cose signature %d is invalid", i)
+		}
+	}
+
+	return nil
+}
+
+// isValidCOSESignature checks whether a COSE signature is a valid for XPIs
+func isValidCOSESignature(sig cose.Signature) error {
+	if len(sig.Headers.Unprotected) != 0 {
+		return fmt.Errorf("XPI COSE Signature must have an empty Unprotected Header")
+	}
+
+	if len(sig.Headers.Protected) != 2 {
+		return fmt.Errorf("XPI COSE Signature must have exactly two Protected Headers")
+	}
+	algValue, ok := sig.Headers.Protected[1] // 1 is the compressed key for "alg"
+	if !ok {
+		return fmt.Errorf("XPI COSE Signature must have alg in Protected Headers")
+	}
+	if !(algValue == cose.PS256.Value || algValue == cose.ES256.Value || algValue == cose.ES384.Value || algValue == cose.ES512.Value) {
+		return fmt.Errorf("XPI COSE Signature must have alg %+v is not supported", algValue)
+	}
+
+	kidValue, ok := sig.Headers.Protected[4] // 4 is the compressed key for "kid"
+	if !ok {
+		return fmt.Errorf("XPI COSE Signature must have kid in Protected Headers")
+	}
+	kidBytes, ok := kidValue.([]byte)
+	if !ok {
+		return fmt.Errorf("XPI COSE Signature kid value is not bytes")
+	}
+
+	_, err := x509.ParseCertificate(kidBytes) // eeCert
+	if err != nil {
+		return errors.Wrapf(err, "XPI COSE Signature kid must decode to a parseable X509 cert")
+	}
+
+	return nil
+}
+
 func TestSignFileWithCOSESignatures(t *testing.T) {
 	t.Parallel()
 
@@ -391,16 +447,18 @@ func TestSignFileWithCOSESignatures(t *testing.T) {
 	}
 
 	// sign input data
-	signedXPI, err := s.SignFile(input, Options{
+	signOptions := Options{
 		ID: "test@example.net",
 		COSEAlgorithms: []string{"ES256", "PS256"},
-	})
+	}
+	signedXPI, err := s.SignFile(input, signOptions)
 	if err != nil {
 		t.Fatalf("failed to sign file: %v", err)
 	}
 	var (
-		coseManifest string = string(readFileFromZIP(t, signedXPI, "META-INF/cose.manifest"))
-		pkcs7Manifest string = string(readFileFromZIP(t, signedXPI, "META-INF/manifest.mf"))
+		coseManifest  = string(readFileFromZIP(t, signedXPI, "META-INF/cose.manifest"))
+		coseMsgBytes = readFileFromZIP(t, signedXPI, "META-INF/cose.sig")
+		pkcs7Manifest = string(readFileFromZIP(t, signedXPI, "META-INF/manifest.mf"))
 	)
 
 	if !strings.Contains(pkcs7Manifest, "cose") {
@@ -408,6 +466,24 @@ func TestSignFileWithCOSESignatures(t *testing.T) {
 	}
 	if strings.Contains(coseManifest, "cose") {
 		t.Fatalf("cose manifest contains cose files: %s", coseManifest)
+	}
+
+	coseObj, err := cose.Unmarshal(coseMsgBytes)
+	if err != nil {
+		t.Fatalf("error unmarshaling cose.sig: %s", err)
+	}
+	coseMsg, ok := coseObj.(cose.SignMessage)
+	if !ok {
+		t.Fatal("cose.sig not a SignMessage")
+	}
+
+	if len(coseMsg.Signatures) != len(signOptions.COSEAlgorithms) {
+		t.Fatalf("cose.sig contains %d signatures, but expected %d", len(coseMsg.Signatures), len(signOptions.COSEAlgorithms))
+	}
+
+	err = isValidCOSEMessage(coseMsg)
+	if err != nil {
+		t.Fatalf("cose.sig is invalid %s", err)
 	}
 }
 
