@@ -14,7 +14,7 @@ import (
 	"time"
 
 	"go.mozilla.org/autograph/signer"
-	"go.mozilla.org/cose"
+	// "go.mozilla.org/cose"
 )
 
 func TestSignFile(t *testing.T) {
