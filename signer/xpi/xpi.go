@@ -194,7 +194,6 @@ func (s *PKCS7Signer) SignFile(input []byte, options interface{}) (signedFile si
 
 		// Add list of DER encoded intermediate certificates as message key id
 		msg.Headers.Protected["kid"] = [][]byte{s.issuerCert.Raw[:]}
-		msg.Headers.Protected = cose.CompressHeaders(msg.Headers.Protected)
 
 		for _, alg := range coseSigAlgs {
 			// create a cert and key
