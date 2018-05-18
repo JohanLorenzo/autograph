@@ -402,6 +402,11 @@ func isValidCOSEMessage(msg cose.SignMessage) error {
 	return nil
 }
 
+// isSupportedCOSEAlgValue returns whether the COSE alg value is supported or not
+func isSupportedCOSEAlgValue(algValue interface{}) bool {
+	return algValue == cose.PS256.Value || algValue == cose.ES256.Value || algValue == cose.ES384.Value || algValue == cose.ES512.Value
+}
+
 // isValidCOSESignature checks whether a COSE signature is a valid for XPIs
 func isValidCOSESignature(sig cose.Signature) error {
 	if len(sig.Headers.Unprotected) != 0 {
@@ -415,7 +420,7 @@ func isValidCOSESignature(sig cose.Signature) error {
 	if !ok {
 		return fmt.Errorf("XPI COSE Signature must have alg in Protected Headers")
 	}
-	if !(algValue == cose.PS256.Value || algValue == cose.ES256.Value || algValue == cose.ES384.Value || algValue == cose.ES512.Value) {
+	if !isSupportedCOSEAlgValue(algValue) {
 		return fmt.Errorf("XPI COSE Signature must have alg %+v is not supported", algValue)
 	}
 
