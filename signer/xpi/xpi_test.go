@@ -354,38 +354,6 @@ func TestRsaCaching(t *testing.T) {
 	}
 }
 
-func TestIsCOSEAlgBad(t *testing.T) {
-	t.Parallel()
-
-	for _, testCase := range []struct{
-		algName string
-		alg     *cose.Algorithm
-		err     bool
-	}{
-		// unrecognized
-		{"ROT13", nil, true},
-
-		// recognized but not supported
-		{"EdDSA", cose.GetAlgByNameOrPanic("EdDSA"), true},
-
-		// recognized and supported
-		{"ES256", cose.GetAlgByNameOrPanic("ES256"), false},
-		{"ES384", cose.GetAlgByNameOrPanic("ES384"), false},
-		{"ES512", cose.GetAlgByNameOrPanic("ES512"), false},
-		{"PS256", cose.GetAlgByNameOrPanic("PS256"), false},
-	}{
-		alg, err := isCOSEAlgBad(testCase.algName)
-		if alg != nil && *testCase.alg != *alg {
-			t.Fatalf("isCOSEAlgBad for %s expected alg %+v but got %+v", testCase.algName, testCase.alg, alg)
-		}
-		if testCase.err == false && err != nil {
-			t.Fatalf("isCOSEAlgBad for %s expected no error but got %+v", testCase.algName, err)
-		} else if testCase.err == true && err == nil {
-			t.Fatalf("isCOSEAlgBad for %s did not get expected error", testCase.algName)
-		}
-	}
-}
-
 func readFileFromZIP(t *testing.T, signedXPI []byte, filename string) (data []byte) {
 	zipReader := bytes.NewReader(signedXPI)
 	r, err := zip.NewReader(zipReader, int64(len(signedXPI)))
