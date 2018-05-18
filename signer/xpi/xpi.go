@@ -165,10 +165,10 @@ func (s *PKCS7Signer) SignFile(input []byte, options interface{}) (signedFile si
 	if err != nil {
 		return nil, errors.Wrap(err, "xpi: cannot get options")
 	}
-	for _, algName := range opt.COSEAlgorithms {
-		alg, err := isCOSEAlgBad(algName)
-		if err != nil {
-			return nil, err
+	for _, algStr := range opt.COSEAlgorithms {
+		alg := stringToCOSEAlg(algStr)
+		if alg == nil {
+			return nil, errors.Wrapf(err, "xpi: invalid or unsupported COSE algorithm %s", algStr)
 		}
 		coseSigAlgs = append(coseSigAlgs, alg)
 	}
