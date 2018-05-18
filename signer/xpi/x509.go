@@ -3,7 +3,6 @@ package xpi
 import (
 	"crypto"
 	"crypto/ecdsa"
-	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/x509"
@@ -70,43 +69,66 @@ func (s *PKCS7Signer) makeTemplate(cn string) (*x509.Certificate) {
 	}
 }
 
+// generateIssuerEEKeyPair returns a public and private key pair
+// matching the issuer PKCS7Signer issuerKey size and type
+func (s *PKCS7Signer) generateIssuerEEKeyPair() (eeKey crypto.PrivateKey, eePublicKey crypto.PublicKey, err error) {
+	switch s.issuerKey.(type) {
+	case *rsa.PrivateKey:
+		size := s.issuerKey.(*rsa.PrivateKey).N.BitLen()
+		eeKey, err = s.getRsaKey(size)
+		if err != nil {
+			err = errors.Wrapf(err, "failed to generate rsa private key of size %d", size)
+			return
+		}
+		eePublicKey = eeKey.(*rsa.PrivateKey).Public()
+	case *ecdsa.PrivateKey:
+		curve := s.issuerKey.(*ecdsa.PrivateKey).Curve
+		eeKey, err = ecdsa.GenerateKey(curve, rand.Reader)
+		if err != nil {
+			err = errors.Wrapf(err, "failed to generate ecdsa private key on curve %s", curve.Params().Name)
+			return
+		}
+		eePublicKey = eeKey.(*ecdsa.PrivateKey).Public()
+	}
+	return
+}
+
 // MakeEndEntity generates a private key and certificate ready to sign a given XPI.
-// The subject CN of the certificate is taken from the `cn` string passed as argument.
-// The type of key is identical to the key of the signer that issues the certificate,
-// if the signer uses an RSA 2048 key, so will the end-entity. The signature algorithm
-// and expiration date are also copied over from the issuer.
 //
-// The signed certificate and private key are returned.
-func (s *PKCS7Signer) MakeEndEntity(cn string) (eeCert *x509.Certificate, eeKey crypto.PrivateKey, err error) {
+// The subject CN of the certificate is taken from the `cn` string argument.
+//
+// The key type is identical to the key type of the signer that issues
+// the certificate when the optional `coseAlg` argument is nil. For
+// example, if the signer uses an RSA 2048 key, so will the
+// end-entity. When `coseAlg` is not nil, a key type of the COSE
+// algorithm is generated.
+//
+// The signature expiration date is copied over from the issuer.
+//
+// The signed x509 certificate and private key are returned.
+func (s *PKCS7Signer) MakeEndEntity(cn string, coseAlg *cose.Algorithm) (eeCert *x509.Certificate, eeKey crypto.PrivateKey, err error) {
 	var (
-		issuerPrivateKey crypto.PrivateKey
 		eePublicKey crypto.PublicKey
 		derCert []byte
 	)
 
 	template := s.makeTemplate(cn)
 
-	switch s.issuerKey.(type) {
-	case *rsa.PrivateKey:
-		size := s.issuerKey.(*rsa.PrivateKey).N.BitLen()
-		eeKey, err = s.getRsaKey(size)
+	if coseAlg == nil {
+		eeKey, eePublicKey, err = s.generateIssuerEEKeyPair()
 		if err != nil {
-			err = errors.Wrapf(err, "xpi.MakeEndEntity: failed to generate rsa private key of size %d", size)
+			err = errors.Wrapf(err, "xpi.MakeEndEntity: error generating key matching issuer")
 			return
 		}
-		issuerPrivateKey = s.issuerKey.(*rsa.PrivateKey)
-		eePublicKey = eeKey.(*rsa.PrivateKey).Public()
-	case *ecdsa.PrivateKey:
-		curve := s.issuerKey.(*ecdsa.PrivateKey).Curve
-		eeKey, err = ecdsa.GenerateKey(curve, rand.Reader)
+	} else {
+		eeKey, eePublicKey, err = s.generateCOSEKeyPair(coseAlg)
 		if err != nil {
-			err = errors.Wrapf(err, "xpi.MakeEndEntity: failed to generate ecdsa private key on curve %s", curve.Params().Name)
+			err = errors.Wrapf(err, "xpi.MakeEndEntity: error generating key matching COSE Algorithm type %s", coseAlg.Name)
 			return
 		}
-		issuerPrivateKey = s.issuerKey.(*ecdsa.PrivateKey)
-		eePublicKey = eeKey.(*ecdsa.PrivateKey).Public()
 	}
-	derCert, err = x509.CreateCertificate(rand.Reader, template, s.issuerCert, eePublicKey, issuerPrivateKey)
+
+	derCert, err = x509.CreateCertificate(rand.Reader, template, s.issuerCert, eePublicKey, s.issuerKey)
 	if err != nil {
 		err = errors.Wrapf(err, "xpi.MakeEndEntity: failed to create certificate")
 		return
@@ -118,98 +140,6 @@ func (s *PKCS7Signer) MakeEndEntity(cn string) (eeCert *x509.Certificate, eeKey 
 	eeCert, err = x509.ParseCertificate(derCert)
 	if err != nil {
 		err = errors.Wrapf(err, "xpi.MakeEndEntity: certificate parsing failed")
-	}
-	return
-}
-
-
-// KeyType is the type to use in keyOptions to tell MakeDEREndEntity
-// which type of crypto.PrivateKey to generate
-type KeyType int
-const (
-	// keyTypeRSA is the keyOptions.keyType to generate an rsa.PrivateKey
-	keyTypeRSA KeyType = iota
-
-	// keyTypeECDSA is the keyOptions.keyType to generate an ecdsa.PrivateKey
-	keyTypeECDSA KeyType = iota
-)
-
-
-func getKeyOptionsForCOSEAlg(alg *cose.Algorithm) (*keyOptions) {
-	switch alg.Name {
-	case "ES256":
-		return &keyOptions{
-			keyType: keyTypeECDSA,
-			ecdsaCurve: elliptic.P256(),
-		}
-	case "ES384":
-		return &keyOptions{
-			keyType: keyTypeECDSA,
-			ecdsaCurve: elliptic.P384(),
-		}
-	case "ES512":
-		return &keyOptions{
-			keyType: keyTypeECDSA,
-			ecdsaCurve: elliptic.P521(),
-		}
-	case "PS256":
-		return &keyOptions{
-			keyType: keyTypeRSA,
-			rsaBits: 2048, // TODO: fixme
-		}
-	default:
-		return nil
-	}
-}
-
-// keyOptions
-type keyOptions struct {
-	keyType KeyType
-
-	// rsaBits is the bit length or size of the RSA key to generate only applies when keyType is keyTypeRSA
-	rsaBits int
-
-	// ecdsaCurve is the elliptic curve to generate an ECDSA key with only applies when keyType is keyTypeECDSA
-	ecdsaCurve elliptic.Curve
-}
-
-// MakeDEREndEntity generates an EE cert and private key like
-// MakeEndEntity but returns the DER encoded certificate bytes instead
-// of a X.509 certificate and takes additional options to generate EEs
-// using different key types or params than the issuer cert
-func (s *PKCS7Signer) MakeDEREndEntity(cn string, opts *keyOptions) (eeDERCert []byte, eeKey crypto.PrivateKey, err error) {
-	var eePublicKey crypto.PublicKey
-	template := s.makeTemplate(cn)
-
-	switch opts.keyType {
-	case keyTypeRSA:
-		size := opts.rsaBits
-		eeKey, err = s.getRsaKey(size)
-		if err != nil {
-			err = errors.Wrapf(err, "xpi.MakeEndEntity: failed to generate rsa private key of size %d", size)
-			return
-		}
-		eePublicKey = eeKey.(*rsa.PrivateKey).Public()
-	case keyTypeECDSA:
-		curve := opts.ecdsaCurve
-		eeKey, err = ecdsa.GenerateKey(curve, rand.Reader)
-		if err != nil {
-			err = errors.Wrapf(err, "xpi.MakeEndEntity: failed to generate ecdsa private key on curve %s", curve.Params().Name)
-			return
-		}
-		eePublicKey = eeKey.(*ecdsa.PrivateKey).Public()
-	default:
-		err = errors.New("xpi: invalid EE private key type")
-		return
-	}
-	eeDERCert, err = x509.CreateCertificate(rand.Reader, template, s.issuerCert, eePublicKey, s.issuerKey)
-	if err != nil {
-		err = errors.Wrapf(err, "xpi.MakeEndEntity: failed to create certificate")
-		return
-	}
-	if len(eeDERCert) == 0 {
-		err = errors.Errorf("xpi.MakeEndEntity: certificate creation failed for an unknown reason")
-		return
 	}
 	return
 }

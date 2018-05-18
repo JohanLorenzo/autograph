@@ -190,7 +190,7 @@ func (s *PKCS7Signer) SignFile(input []byte, options interface{}) (signedFile si
 		msg := &tmp
 		msg.Payload = manifest
 
-		var coseSigners []*cose.Signer
+		var coseSigners []cose.Signer
 
 		// Add list of DER encoded intermediate certificates as message key id
 		msg.Headers.Protected["kid"] = [][]byte{s.issuerCert.Raw[:]}
@@ -198,22 +198,22 @@ func (s *PKCS7Signer) SignFile(input []byte, options interface{}) (signedFile si
 
 		for _, alg := range coseSigAlgs {
 			// create a cert and key
-			eeDERCert, eeKey, err := s.MakeDEREndEntity(cn, getKeyOptionsForCOSEAlg(alg))
+			eeCert, eeKey, err := s.MakeEndEntity(cn, alg)
 			if err != nil {
 				return nil, err
 			}
 
 			// create a COSE.Signer
-			signer, err := cose.NewSigner(eeKey)
+			signer, err := cose.NewSignerFromKey(alg, eeKey)
 			if err != nil {
 				return nil, errors.Wrap(err, "xpi: COSE signer creation failed")
 			}
-			coseSigners = append(coseSigners, signer)
+			coseSigners = append(coseSigners, *signer)
 
 			// create a COSE Signature holder
 			sig := cose.NewSignature()
 			sig.Headers.Protected["alg"] = alg.Name
-			sig.Headers.Protected["kid"] = [][]byte{eeDERCert[:]}
+			sig.Headers.Protected["kid"] = [][]byte{eeCert.Raw[:]}
 			msg.AddSignature(sig)
 		}
 
@@ -299,7 +299,7 @@ func (s *PKCS7Signer) signData(sigfile []byte, options interface{}) ([]byte, err
 	if cn == "" {
 		return nil, errors.New("xpi: missing common name")
 	}
-	eeCert, eeKey, err := s.MakeEndEntity(cn)
+	eeCert, eeKey, err := s.MakeEndEntity(cn, nil)
 	if err != nil {
 		return nil, err
 	}
