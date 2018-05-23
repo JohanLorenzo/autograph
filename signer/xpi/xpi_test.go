@@ -543,7 +543,7 @@ func TestSignFileWithCOSESignatures(t *testing.T) {
 	}
 	for i, eeCert := range eeCerts {
 		opts := x509.VerifyOptions{
-			DNSName:       "test@example.net",
+			DNSName:       signOptions.ID,
 			Roots:         roots,
 			Intermediates: intermediates,
 		}
