@@ -394,3 +394,55 @@ func (sig *Signature) String() string {
 	pem.Encode(&buf, &pem.Block{Type: "PKCS7", Bytes: sig.Data})
 	return string(buf.Bytes())
 }
+
+// verifyPKCS7SignatureRoundTrip checks that
+//
+// 1) the signed XPI includes a PKCS7 signature and signature data
+// 2) the signature serializes and deserializes properly
+// 3) the signature cert chain verifies (domain, expiration date, etc.)
+//
+func verifyPKCS7SignatureRoundTrip(signedFile signer.SignedFile) error {
+	var (
+		sigStr = base64.StdEncoding.EncodeToString(mustReadFileFromZIP(signedFile, "META-INF/mozilla.rsa"))
+		sigData = mustReadFileFromZIP(signedFile, "META-INF/mozilla.sf")
+	)
+
+	// convert string format back to signature
+	sig, err := Unmarshal(sigStr, sigData)
+	if err != nil {
+		return errors.Wrapf(err, "failed to unmarshal PKCS7 signature")
+	}
+	// verify signature on input data
+	if sig.VerifyWithChain(nil) != nil {
+		return fmt.Errorf("failed to verify xpi signature: %v", sig.VerifyWithChain(nil))
+	}
+
+	// make sure we still have the same string representation
+	sigStr2, err := sig.Marshal()
+	if err != nil {
+		return fmt.Errorf("failed to re-marshal signature: %v", err)
+	}
+	if sigStr != sigStr2 {
+		return fmt.Errorf("marshalling signature changed its format.\nexpected\t%q\nreceived\t%q",
+			sigStr, sigStr2)
+	}
+	// verify signature on input data
+	if sig.VerifyWithChain(nil) != nil {
+		return fmt.Errorf("failed to verify xpi signature: %v", sig.VerifyWithChain(nil))
+	}
+	return nil
+}
+
+// VerifySignedFile checks the XPI's PKCS7 signature and, when
+// present, COSE signatures
+func VerifySignedFile(signedFile signer.SignedFile, opts Options) error {
+	err := verifyPKCS7SignatureRoundTrip(signedFile)
+	if err != nil {
+		return errors.Wrap(err, "xpi: error verifying PKCS7 signature for signed file")
+	}
+	if len(opts.COSEAlgorithms) > 0 {
+		err = verifyCOSESignatures(signedFile, opts)
+		return errors.Wrap(err, "xpi: error verifying COSE signatures for signed file")
+	}
+	return nil
+}

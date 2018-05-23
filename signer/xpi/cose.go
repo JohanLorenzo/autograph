@@ -10,6 +10,7 @@ import (
 
 	"github.com/pkg/errors"
 	"go.mozilla.org/cose"
+	"go.mozilla.org/autograph/signer"
 )
 
 // stringToCOSEAlg returns the cose.Algorithm for a string or nil if
@@ -155,4 +156,68 @@ func isValidCOSEMessage(msg cose.SignMessage) (intermediateCerts, eeCerts []*x50
 	}
 
 	return
+}
+
+// verifyCOSESignatures checks that:
+//
+// 1) COSE manifest and signature files are present
+// 2) the PKCS7 manifest is present
+// 3) the COSE and PKCS7 manifests do not include COSE files
+// 4) we can decode the COSE signature and it has the right format for an XPI
+// 5) the right number of signatures are present and all intermediate and end entity certs parse properly
+// TODO: 6) there is a trusted path from the included COSE EE certs to the signer cert using the provided intermediates
+//
+func verifyCOSESignatures(signedFile signer.SignedFile, signOptions Options) error {
+	var (
+		coseManifest  = string(mustReadFileFromZIP(signedFile, "META-INF/cose.manifest"))
+		coseMsgBytes = mustReadFileFromZIP(signedFile, "META-INF/cose.sig")
+		pkcs7Manifest = string(mustReadFileFromZIP(signedFile, "META-INF/manifest.mf"))
+	)
+
+	if !strings.Contains(pkcs7Manifest, "cose") {
+		return fmt.Errorf("pkcs7 manifest does not contain cose files: %s", pkcs7Manifest)
+	}
+	if strings.Contains(coseManifest, "cose") {
+		return fmt.Errorf("cose manifest contains cose files: %s", coseManifest)
+	}
+
+	coseObj, err := cose.Unmarshal(coseMsgBytes)
+	if err != nil {
+		return errors.Wrap(err, "error unmarshaling cose.sig")
+	}
+	coseMsg, ok := coseObj.(cose.SignMessage)
+	if !ok {
+		return fmt.Errorf("cose.sig not a SignMessage")
+	}
+
+	if len(coseMsg.Signatures) != len(signOptions.COSEAlgorithms) {
+		return fmt.Errorf("cose.sig contains %d signatures, but expected %d", len(coseMsg.Signatures), len(signOptions.COSEAlgorithms))
+	}
+
+	// intermediateCerts, eeCerts, err := isValidCOSEMessage(coseMsg)
+	_, _, err = isValidCOSEMessage(coseMsg)
+	if err != nil {
+		return errors.Wrap(err, "cose.sig is not a valid COSE SignMessage")
+	}
+
+	// check that we can verify EE certs with the provided intermediates
+	// roots, intermediates := x509.NewCertPool(), x509.NewCertPool()
+	// ok = roots.AppendCertsFromPEM([]byte(testcase.Certificate))
+	// if !ok {
+	// 	return fmt.Errorf("failed to add root cert to pool")
+	// }
+	// for _, intermediateCert := range intermediateCerts {
+	// 	intermediates.AddCert(intermediateCert)
+	// }
+	// for i, eeCert := range eeCerts {
+	// 	opts := x509.VerifyOptions{
+	// 		DNSName:       signOptions.ID,
+	// 		Roots:         roots,
+	// 		Intermediates: intermediates,
+	// 	}
+	// 	if _, err := eeCert.Verify(opts); err != nil {
+	// 		return fmt.Errorf("failed to verify EECert %d %s", i, err)
+	// 	}
+	// }
+	return nil
 }
