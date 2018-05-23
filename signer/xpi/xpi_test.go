@@ -7,7 +7,6 @@ import (
 	"crypto/x509"
 	"encoding/base64"
 	"encoding/pem"
-	"fmt"
 	"io/ioutil"
 	"os"
 	"os/exec"
@@ -15,7 +14,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pkg/errors"
 	"go.mozilla.org/autograph/signer"
 	"go.mozilla.org/cose"
 )
