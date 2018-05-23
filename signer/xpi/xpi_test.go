@@ -383,46 +383,57 @@ func readFileFromZIP(t *testing.T, signedXPI []byte, filename string) (data []by
 	return
 }
 
-// isValidCOSEMessage checks whether a COSE SignMessage is a valid for XPIs
-func isValidCOSEMessage(msg cose.SignMessage) error {
+// isValidCOSEMessage checks whether a COSE SignMessage is a valid for
+// XPIs and returns parsed intermediate and end entity certs
+func isValidCOSEMessage(msg cose.SignMessage) (intermediateCerts, eeCerts []*x509.Certificate, resultErr error) {
 	if msg.Payload != nil {
-		return fmt.Errorf("Expected SignMessage payload to be nil, but got %+v", msg.Payload)
+		resultErr = fmt.Errorf("Expected SignMessage payload to be nil, but got %+v", msg.Payload)
+		return
 	}
 	if len(msg.Headers.Unprotected) != 0 {
-		return fmt.Errorf("Expected SignMessage Unprotected headers to be empty, but got %+v", msg.Headers.Unprotected)
+		resultErr = fmt.Errorf("Expected SignMessage Unprotected headers to be empty, but got %+v", msg.Headers.Unprotected)
+		return
 	}
 
 	if len(msg.Headers.Protected) != 1 {
-		return fmt.Errorf("Expected SignMessage Protected headers must contain one value, but got %d", len(msg.Headers.Protected))
+		resultErr = fmt.Errorf("Expected SignMessage Protected headers must contain one value, but got %d", len(msg.Headers.Protected))
+		return
 	}
 	kidValue, ok := msg.Headers.Protected[4] // 4 is the compressed key for "kid"
 	if !ok {
-		return fmt.Errorf("Expected SignMessage must have kid in Protected Headers")
+		resultErr = fmt.Errorf("Expected SignMessage must have kid in Protected Headers")
+		return
 	}
 	// check that all kid values are bytes and decode into certs
 	kidArray, ok := kidValue.([]interface{})
 	if !ok {
-		return fmt.Errorf("Expected SignMessage Protected Headers kid value to be an array got %+v with type %T", kidValue, kidValue)
+		resultErr = fmt.Errorf("Expected SignMessage Protected Headers kid value to be an array got %+v with type %T", kidValue, kidValue)
+		return
 	}
 	for i, cert := range kidArray {
 		certBytes, ok := cert.([]byte)
 		if !ok {
-			return fmt.Errorf("Expected SignMessage Protected Headers kid value %d to be a byte slice got %+v with type %T", i, cert, cert)
+			resultErr = fmt.Errorf("Expected SignMessage Protected Headers kid value %d to be a byte slice got %+v with type %T", i, cert, cert)
+			return
 		}
-		_, err := x509.ParseCertificate(certBytes)
+		intermediateCert, err := x509.ParseCertificate(certBytes)
 		if err != nil {
-			return errors.Wrapf(err, "SignMessage Signature Protected Headers kid value %d does not decode to a parseable X509 cert", i)
+			resultErr = errors.Wrapf(err, "SignMessage Signature Protected Headers kid value %d does not decode to a parseable X509 cert", i)
+			return
 		}
+		intermediateCerts = append(intermediateCerts, intermediateCert)
 	}
 
 	for i, sig := range msg.Signatures {
-		err := isValidCOSESignature(sig)
+		eeCert, err := isValidCOSESignature(sig)
 		if err != nil {
-			return errors.Wrapf(err, "cose signature %d is invalid", i)
+			resultErr = errors.Wrapf(err, "cose signature %d is invalid", i)
+			return
 		}
+		eeCerts = append(eeCerts, eeCert)
 	}
 
-	return nil
+	return
 }
 
 // isSupportedCOSEAlgValue returns whether the COSE alg value is supported or not
@@ -431,37 +442,43 @@ func isSupportedCOSEAlgValue(algValue interface{}) bool {
 }
 
 // isValidCOSESignature checks whether a COSE signature is a valid for XPIs
-func isValidCOSESignature(sig cose.Signature) error {
+func isValidCOSESignature(sig cose.Signature) (eeCert *x509.Certificate, resultErr error) {
 	if len(sig.Headers.Unprotected) != 0 {
-		return fmt.Errorf("XPI COSE Signature must have an empty Unprotected Header")
+		resultErr = fmt.Errorf("XPI COSE Signature must have an empty Unprotected Header")
+		return
 	}
 
 	if len(sig.Headers.Protected) != 2 {
-		return fmt.Errorf("XPI COSE Signature must have exactly two Protected Headers")
+		resultErr = fmt.Errorf("XPI COSE Signature must have exactly two Protected Headers")
+		return
 	}
 	algValue, ok := sig.Headers.Protected[1] // 1 is the compressed key for "alg"
 	if !ok {
-		return fmt.Errorf("XPI COSE Signature must have alg in Protected Headers")
+		resultErr = fmt.Errorf("XPI COSE Signature must have alg in Protected Headers")
+		return
 	}
 	if !isSupportedCOSEAlgValue(algValue) {
-		return fmt.Errorf("XPI COSE Signature must have alg %+v is not supported", algValue)
+		resultErr = fmt.Errorf("XPI COSE Signature must have alg %+v is not supported", algValue)
+		return
 	}
 
 	kidValue, ok := sig.Headers.Protected[4] // 4 is the compressed key for "kid"
 	if !ok {
-		return fmt.Errorf("XPI COSE Signature must have kid in Protected Headers")
+		resultErr = fmt.Errorf("XPI COSE Signature must have kid in Protected Headers")
+		return
 	}
 	kidBytes, ok := kidValue.([]byte)
 	if !ok {
-		return fmt.Errorf("XPI COSE Signature kid value is not bytes")
+		resultErr = fmt.Errorf("XPI COSE Signature kid value is not bytes")
+		return
 	}
 
-	_, err := x509.ParseCertificate(kidBytes) // eeCert
+	eeCert, err := x509.ParseCertificate(kidBytes) // eeCert
 	if err != nil {
-		return errors.Wrapf(err, "XPI COSE Signature kid must decode to a parseable X509 cert")
+		resultErr = errors.Wrapf(err, "XPI COSE Signature kid must decode to a parseable X509 cert")
+		return
 	}
-
-	return nil
+	return
 }
 
 func TestSignFileWithCOSESignatures(t *testing.T) {
@@ -510,9 +527,29 @@ func TestSignFileWithCOSESignatures(t *testing.T) {
 		t.Fatalf("cose.sig contains %d signatures, but expected %d", len(coseMsg.Signatures), len(signOptions.COSEAlgorithms))
 	}
 
-	err = isValidCOSEMessage(coseMsg)
+	intermediateCerts, eeCerts, err := isValidCOSEMessage(coseMsg)
 	if err != nil {
 		t.Fatalf("cose.sig is invalid %s", err)
+	}
+
+	// check that we can verify EE certs with the provided intermediates
+	roots, intermediates := x509.NewCertPool(), x509.NewCertPool()
+	ok = roots.AppendCertsFromPEM([]byte(testcase.Certificate))
+	if !ok {
+		t.Fatalf("failed to add root cert to pool")
+	}
+	for _, intermediateCert := range intermediateCerts {
+		intermediates.AddCert(intermediateCert)
+	}
+	for i, eeCert := range eeCerts {
+		opts := x509.VerifyOptions{
+			DNSName:       "test@example.net",
+			Roots:         roots,
+			Intermediates: intermediates,
+		}
+		if _, err := eeCert.Verify(opts); err != nil {
+			t.Fatalf("failed to verify EECert %d %s", i, err)
+		}
 	}
 }
 
