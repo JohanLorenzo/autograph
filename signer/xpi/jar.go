@@ -201,3 +201,28 @@ func isSignatureFile(name string) bool {
 	}
 	return false
 }
+
+// mustReadFileFromZIP reads a given filename out of a ZIP and returns it or panics
+func mustReadFileFromZIP(signedXPI []byte, filename string) (data []byte) {
+	zipReader := bytes.NewReader(signedXPI)
+	r, err := zip.NewReader(zipReader, int64(len(signedXPI)))
+	if err != nil {
+		panic(fmt.Sprintf("Error reading ZIP %s", err))
+	}
+
+	for _, f := range r.File {
+		if f.Name == filename {
+			rc, err := f.Open()
+			defer rc.Close()
+			if err != nil {
+				panic(fmt.Sprintf("Error opening file %s in ZIP %s", filename, err))
+			}
+			data, err = ioutil.ReadAll(rc)
+			if err != nil {
+				panic(fmt.Sprintf("Error reading file %s in ZIP %s", filename, err))
+			}
+			return
+		}
+	}
+	panic(fmt.Sprintf("failed to find %s in ZIP", filename))
+}

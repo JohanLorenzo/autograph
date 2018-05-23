@@ -357,32 +357,6 @@ func TestRsaCaching(t *testing.T) {
 	}
 }
 
-// readFileFromZIP reads a given filename out of a ZIP or fails the test
-func readFileFromZIP(t *testing.T, signedXPI []byte, filename string) (data []byte) {
-	zipReader := bytes.NewReader(signedXPI)
-	r, err := zip.NewReader(zipReader, int64(len(signedXPI)))
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	for _, f := range r.File {
-		if f.Name == filename {
-			rc, err := f.Open()
-			defer rc.Close()
-			if err != nil {
-				t.Fatal(err)
-			}
-			data, err = ioutil.ReadAll(rc)
-			if err != nil {
-				t.Fatal(err)
-			}
-			return
-		}
-	}
-	t.Fatalf("failed to find %s in ZIP", filename)
-	return
-}
-
 // isValidCOSEMessage checks whether a COSE SignMessage is a valid for
 // XPIs and returns parsed intermediate and end entity certs
 func isValidCOSEMessage(msg cose.SignMessage) (intermediateCerts, eeCerts []*x509.Certificate, resultErr error) {
@@ -502,9 +476,9 @@ func TestSignFileWithCOSESignatures(t *testing.T) {
 		t.Fatalf("failed to sign file: %v", err)
 	}
 	var (
-		coseManifest  = string(readFileFromZIP(t, signedXPI, "META-INF/cose.manifest"))
-		coseMsgBytes = readFileFromZIP(t, signedXPI, "META-INF/cose.sig")
-		pkcs7Manifest = string(readFileFromZIP(t, signedXPI, "META-INF/manifest.mf"))
+		coseManifest  = string(mustReadFileFromZIP(signedXPI, "META-INF/cose.manifest"))
+		coseMsgBytes = mustReadFileFromZIP(signedXPI, "META-INF/cose.sig")
+		pkcs7Manifest = string(mustReadFileFromZIP(signedXPI, "META-INF/manifest.mf"))
 	)
 
 	if !strings.Contains(pkcs7Manifest, "cose") {
